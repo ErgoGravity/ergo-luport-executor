@@ -4,17 +4,19 @@ version := "0.1.0"
 organization := "ergo.susy"
 scalaVersion := "2.12.10"
 
-resolvers ++= Seq(
-  "Sonatype Public" at "https://oss.sonatype.org/content/groups/public/",
-  "Sonatype Releases" at "https://oss.sonatype.org/content/repositories/releases/",
-  "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
-  "Typesafe maven releases" at "https://dl.bintray.com/typesafe/maven-releases/"
-)
+resolvers += "scalaz-bintray" at "https://dl.bintray.com/scalaz/releases"
+resolvers += "Akka Snapshot Repository" at "https://repo.akka.io/snapshots/"
+resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
+resolvers += "Typesafe maven releases" at "https://dl.bintray.com/typesafe/maven-releases/"
+resolvers += "Sonatype Releases" at "https://oss.sonatype.org/content/repositories/releases/"
 
 libraryDependencies ++= Seq(
-  "org.ergoplatform" %% "ergo-appkit" % "4.0.4",
+  "org.ergoplatform" %% "ergo-appkit" % "develop-dd40e4e5-SNAPSHOT",
+  "org.scalaj" %% "scalaj-http" % "2.4.2",
   "com.joefkelley" %% "argyle" % "1.0.0",
-  "com.github.scopt" %% "scopt" % "4.0.1"
+  "com.github.scopt" %% "scopt" % "4.0.1",
+  "com.typesafe" % "config" % "1.4.1",
+  "io.jvm.uuid" %% "scala-uuid" % "0.3.1"
 )
 
 scalacOptions ++= Seq(
