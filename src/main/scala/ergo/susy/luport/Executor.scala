@@ -1,11 +1,12 @@
 package ergo.susy.luport
 
 import org.ergoplatform.appkit._
-import io.jvm.uuid._
 import java.io.PrintWriter
 import org.ergoplatform.appkit.impl.ErgoTreeContract
 import org.ergoplatform.appkit.{Address, ErgoToken, InputBox, OutBox}
 import scala.collection.JavaConverters._
+
+import sigmastate.eval._
 
 object Executor {
   private def getSpecBox(ctx: BlockchainContext, typeBox: String, settings: Setting): InputBox = {
@@ -21,10 +22,8 @@ object Executor {
       case "proxy" =>
         ("proxy", settings.feeAddress.toString, "")
     }
-    println(boxData)
 
     val boxes = ctx.getCoveringBoxesFor(Address.create(boxData._2), (1e9 * 1e8).toLong).getBoxes.asScala.toList
-    println(boxes)
     val box = if (boxData._1.equals("proxy"))
       boxes.filter(box => box.getValue >= settings.defaultTxFee * settings.amount && box.getTokens.size == 0)
     else if (boxData._1.equals("maintainer"))
@@ -42,19 +41,28 @@ object Executor {
     val txB = ctx.newTxBuilder()
 
     def createOutputBoxes(txB: UnsignedTransactionBuilder, linkListTokenRepoBox: InputBox, maintainerBox: InputBox): (OutBox, OutBox, OutBox, OutBox) = {
+      val lastRequestId = BigInt(linkListTokenRepoBox.getRegisters.get(0).getValue.asInstanceOf[special.sigma.BigInt])
+      val nftCount = linkListTokenRepoBox.getRegisters.get(1).getValue.asInstanceOf[Int]
+      val nftNumber = linkListTokenRepoBox.getRegisters.get(2).getValue.asInstanceOf[Int]
+
       val linklist = txB.outBoxBuilder
         .value(linkListTokenRepoBox.getValue - settings.defaultTxFee)
         .tokens(new ErgoToken(linkListTokenRepoBox.getTokens.get(0).getId, 1),
           new ErgoToken(linkListTokenRepoBox.getTokens.get(1).getId, linkListTokenRepoBox.getTokens.get(1).getValue - 1))
+        .registers(ErgoValue.of((lastRequestId + BigInt(nftNumber + 1)).bigInteger),
+          ErgoValue.of(nftCount),
+          ErgoValue.of(nftNumber)
+        )
         .contract(new ErgoTreeContract(Address.create(settings.linkListAddress).getErgoAddress.script))
         .build()
 
+      val receiver = settings.receiverAddress.getBytes()
       val linkListElement = txB.outBoxBuilder
         .value(settings.defaultTxFee)
         .tokens(new ErgoToken(linkListTokenRepoBox.getTokens.get(1).getId, 1))
-        .registers(ErgoValue.of(settings.receiverAddress.getBytes()),
+        .registers(ErgoValue.of(receiver),
           ErgoValue.of(settings.amount),
-          ErgoValue.of(ctx.getHeight.toLong),
+          ErgoValue.of((lastRequestId + BigInt(nftNumber + 1)).bigInteger)
         )
         .contract(new ErgoTreeContract(Address.create(settings.linkListElementAddress).getErgoAddress.script))
         .build()
@@ -72,7 +80,7 @@ object Executor {
       val maintainer = txB.outBoxBuilder
         .value(requestValue)
         .tokens(new ErgoToken(maintainerBox.getTokens.get(0).getId, 1),
-          new ErgoToken(tokenIdBox.getTokens.get(0).getId, maintainerBox.getTokens.get(1).getValue + tokenAmount))
+          new ErgoToken(maintainerBox.getTokens.get(1).getId, maintainerBox.getTokens.get(1).getValue + tokenAmount))
         .registers(ErgoValue.of(fee))
         .contract(new ErgoTreeContract(Address.create(settings.maintainerAddress).getErgoAddress.script))
         .build()
@@ -87,6 +95,7 @@ object Executor {
 
 
     val (linklistOut, linkListElementOut, maintainerOut, tokenIdOut) = createOutputBoxes(txB, linkListTokenRepoBox, maintainerBox)
+
     val tx = txB.boxesToSpend(Seq(linkListTokenRepoBox, maintainerBox, tokenIdBox, boxFee).asJava)
       .outputs(linklistOut, linkListElementOut, maintainerOut, tokenIdOut)
       .fee(settings.defaultTxFee)
@@ -115,9 +124,13 @@ object Executor {
       .build()
 
     val linklistBox = getSpecBox(ctx, "linkList", settings)
+    println(linklistBox)
     val maintainerBox = getSpecBox(ctx, "maintainer", settings)
+    println(maintainerBox)
     val feeBox = getSpecBox(ctx, "proxy", settings)
+    println(feeBox)
     val tokenIdBox = getSpecBox(ctx, "tokenId", settings)
+    println(tokenIdBox)
 
     createLinkListElementBox(ctx, settings, prover, feeBox, linklistBox, maintainerBox, tokenIdBox)
   }
