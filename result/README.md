@@ -1,2 +1,2 @@
 ### result folder
-* Transactions are saved in this folder. 
+* Transaction will be saved in this folder. 

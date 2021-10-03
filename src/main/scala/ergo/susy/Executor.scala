@@ -1,31 +1,36 @@
-package ergo.susy.luport
+package ergo.susy
 
 import org.ergoplatform.appkit._
 import java.io.PrintWriter
 import org.ergoplatform.appkit.impl.ErgoTreeContract
 import org.ergoplatform.appkit.{Address, ErgoToken, InputBox, OutBox}
-import scala.collection.JavaConverters._
 
-import sigmastate.eval._
+import scala.collection.JavaConverters._
+import java.security.SecureRandom
 
 object Executor {
-  private def getSpecBox(ctx: BlockchainContext, typeBox: String, settings: Setting): InputBox = {
+
+  private def selectRandomBox(seq: Seq[InputBox]): Option[InputBox] = {
+    val random = new SecureRandom()
+    new scala.util.Random(random).shuffle(seq).headOption
+  }
+
+  private def getSpecBox(ctx: BlockchainContext, settings: Setting, typeBox: String, random: Boolean = false): InputBox = {
     val boxData = typeBox match {
       case "linkList" =>
-        ("linkList", settings.linkListAddress, settings.linklistTokenId)
+        ("linkList", settings.linkListAddress, settings.linkListTokenId)
       case "maintainer" =>
         ("maintainer", settings.maintainerAddress, settings.maintainerTokenId)
       case "linkListElement" =>
-        ("linkListElement", settings.linkListElementAddress, settings.linklistRepoTokenId)
+        ("linkListElement", settings.linkListElementAddress, settings.linkListRepoTokenId)
       case "tokenId" =>
-        ("tokenId", settings.feeAddress.toString, settings.tokenId)
-      case "proxy" =>
-        ("proxy", settings.feeAddress.toString, "")
+        ("tokenId", settings.receiverAddress, settings.tokenId)
+      case "fee" =>
+        ("fee", settings.receiverAddress, "")
     }
-
     val boxes = ctx.getCoveringBoxesFor(Address.create(boxData._2), (1e9 * 1e8).toLong).getBoxes.asScala.toList
-    val box = if (boxData._1.equals("proxy"))
-      boxes.filter(box => box.getValue >= settings.defaultTxFee * settings.amount && box.getTokens.size == 0)
+    val box = if (boxData._1.equals("fee"))
+      boxes.filter(box => box.getValue >= settings.defaultTxFee * 2 && box.getTokens.size == 0)
     else if (boxData._1.equals("maintainer"))
       boxes.filter(box => box.getTokens.size() > 0 &&
         box.getTokens.get(0).getId.toString.equals(boxData._3) &&
@@ -34,25 +39,25 @@ object Executor {
     else
       boxes.filter(box => box.getTokens.size() > 0 && box.getTokens.get(0).getId.toString.equals(boxData._3))
 
-    box.headOption.orNull
+    if (random) selectRandomBox(box).orNull else box.headOption.orNull
   }
 
-  def createLinkListElementBox(ctx: BlockchainContext, settings: Setting, prover: ErgoProver, boxFee: InputBox, linkListTokenRepoBox: InputBox, maintainerBox: InputBox, tokenIdBox: InputBox): Unit = {
+  def createWrapRequest(ctx: BlockchainContext, settings: Setting, prover: ErgoProver, linkListTokenRepoBox: InputBox, maintainerBox: InputBox, tokenIdBox: InputBox, feeBox: InputBox): Unit = {
     val txB = ctx.newTxBuilder()
 
     def createOutputBoxes(txB: UnsignedTransactionBuilder, linkListTokenRepoBox: InputBox, maintainerBox: InputBox): (OutBox, OutBox, OutBox, OutBox) = {
-      val lastRequestId = BigInt(linkListTokenRepoBox.getRegisters.get(0).getValue.asInstanceOf[special.sigma.BigInt])
-      val nftCount = linkListTokenRepoBox.getRegisters.get(1).getValue.asInstanceOf[Int]
+      val lastRequestId = BigInt(JavaHelpers.SigmaDsl.toBigInteger(linkListTokenRepoBox.getRegisters.get(0).getValue.asInstanceOf[special.sigma.BigInt]))
       val nftNumber = linkListTokenRepoBox.getRegisters.get(2).getValue.asInstanceOf[Int]
+      val newRequestId = (lastRequestId + BigInt(nftNumber + 1)).bigInteger
 
       val linklist = txB.outBoxBuilder
         .value(linkListTokenRepoBox.getValue - settings.defaultTxFee)
-        .tokens(new ErgoToken(linkListTokenRepoBox.getTokens.get(0).getId, 1),
+        .tokens(linkListTokenRepoBox.getTokens.get(0),
           new ErgoToken(linkListTokenRepoBox.getTokens.get(1).getId, linkListTokenRepoBox.getTokens.get(1).getValue - 1))
-        .registers(ErgoValue.of((lastRequestId + BigInt(nftNumber + 1)).bigInteger),
-          ErgoValue.of(nftCount),
-          ErgoValue.of(nftNumber)
-        )
+        .registers(
+          ErgoValue.of(newRequestId),
+          linkListTokenRepoBox.getRegisters.get(1),
+          linkListTokenRepoBox.getRegisters.get(2))
         .contract(new ErgoTreeContract(Address.create(settings.linkListAddress).getErgoAddress.script))
         .build()
 
@@ -71,11 +76,11 @@ object Executor {
       val amount: Long = settings.amount + fee * settings.amount / 10000
       var requestValue = 0L
       var tokenAmount = 0L
-      if (settings.tokenId.isEmpty) {
-        requestValue = maintainerBox.getValue + amount
-      } else {
+      if (maintainerBox.getTokens.size > 1) {
         requestValue = maintainerBox.getValue
         tokenAmount = amount
+      } else {
+        requestValue = maintainerBox.getValue + amount
       }
       val maintainer = txB.outBoxBuilder
         .value(requestValue)
@@ -88,50 +93,47 @@ object Executor {
       val tokenId = txB.outBoxBuilder
         .value(tokenIdBox.getValue)
         .tokens(new ErgoToken(tokenIdBox.getTokens.get(0).getId, tokenIdBox.getTokens.get(0).getValue - tokenAmount))
-        .contract(new ErgoTreeContract(settings.feeAddress.getErgoAddress.script))
+        .contract(new ErgoTreeContract(Address.create(settings.receiverAddress).getErgoAddress.script))
         .build()
       (linklist, linkListElement, maintainer, tokenId)
     }
 
-
     val (linklistOut, linkListElementOut, maintainerOut, tokenIdOut) = createOutputBoxes(txB, linkListTokenRepoBox, maintainerBox)
 
-    val tx = txB.boxesToSpend(Seq(linkListTokenRepoBox, maintainerBox, tokenIdBox, boxFee).asJava)
+    val tx = txB.boxesToSpend(Seq(linkListTokenRepoBox, maintainerBox, tokenIdBox, feeBox).asJava)
       .outputs(linklistOut, linkListElementOut, maintainerOut, tokenIdOut)
       .fee(settings.defaultTxFee)
-      .sendChangeTo(settings.feeAddress.getErgoAddress)
+      .sendChangeTo(Address.create(settings.receiverAddress).getErgoAddress)
       .build()
 
     val signed: SignedTransaction = prover.sign(tx)
-    new PrintWriter(s"result/LinkliestElementBox_signed.txt") {
-      write(signed.toJson(false));
+    new PrintWriter(s"result/luportWrapRequest.txt") {
+      write(signed.toJson(false))
       close()
     }
     val txId = ctx.sendTransaction(signed)
-    new PrintWriter(s"result/LinkliestElementBox_txId.txt") {
-      write(txId);
+    new PrintWriter(s"result/luportWrapRequest_txId.txt") {
+      write(txId)
       close()
     }
     println(s"txId: $txId")
   }
 
   def run(ctx: BlockchainContext, settings: Setting): Unit = {
-    println(settings)
 
-    val secret = BigInt(settings.senderPrivKeyStr, 16)
-    val prover = ctx.newProverBuilder()
-      .withDLogSecret(secret.bigInteger)
-      .build()
+      val prover = ctx.newProverBuilder()
+        .withDLogSecret(settings.receiverSecret)
+        .build()
 
-    val linklistBox = getSpecBox(ctx, "linkList", settings)
-    println(linklistBox)
-    val maintainerBox = getSpecBox(ctx, "maintainer", settings)
-    println(maintainerBox)
-    val feeBox = getSpecBox(ctx, "proxy", settings)
-    println(feeBox)
-    val tokenIdBox = getSpecBox(ctx, "tokenId", settings)
-    println(tokenIdBox)
+      val linkListTokenRepoBox = getSpecBox(ctx, settings,"linkList")
+      val maintainerBox = getSpecBox(ctx, settings, "maintainer")
+      val tokenIdBox = getSpecBox(ctx, settings, "tokenId")
+      val feeBox = getSpecBox(ctx, settings, "fee", random = true)
+      println(linkListTokenRepoBox.getId.toString)
+      println(maintainerBox.getId.toString)
+      println(tokenIdBox.getId.toString)
+      println(feeBox.getId.toString)
 
-    createLinkListElementBox(ctx, settings, prover, feeBox, linklistBox, maintainerBox, tokenIdBox)
+      createWrapRequest(ctx, settings, prover, linkListTokenRepoBox, maintainerBox, tokenIdBox, feeBox)
   }
 }

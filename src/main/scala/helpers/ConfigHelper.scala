@@ -31,4 +31,35 @@ trait ConfigHelper {
         sys.exit()
     }
   }
+
+  def getTokens(key: String, default: String = null): Map[String, String]= {
+    try {
+      val url = readKey(key)
+      val data = GetRequest.susyTokens(url)
+      var tokens = Map[String, String]()
+      data.foreach { case (key, value) =>
+          if(key == "gwTokenId"){
+            tokens += "tokeId" -> value
+          }else{
+            tokens += key -> value
+          }
+      }
+      tokens
+    } catch {
+      case ex: Throwable =>
+        println(ex.getMessage)
+        sys.exit()
+    }
+  }
+  def getContracts(key: String, default: String = null): Map[String, String]= {
+    try {
+      val url = readKey(key)
+      val Contracts = GetRequest.susyContracts(url)
+      Contracts
+    } catch {
+      case ex: Throwable =>
+        println(ex.getMessage)
+        sys.exit()
+    }
+  }
 }
